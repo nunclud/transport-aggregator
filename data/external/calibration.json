@@ -1,0 +1,7 @@
+{
+  "source": "https://raw.githubusercontent.com/BelideSaiTeja/Flight-Price-Prediction/main/Flight%20Price%20Prediction%20dataset.csv",
+  "far_price_avg": 4769.5,
+  "near_price_avg": 12088.7,
+  "near_vs_far_price_gap": 1.535,
+  "calibrated_air_urgency": 0.645
+}

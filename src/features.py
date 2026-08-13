@@ -17,7 +17,6 @@ Features per offer snapshot:
   carrier_rank         cheapness rank of carrier on the route (1 = cheapest avg)
 """
 from __future__ import annotations
-import sqlite3
 import pandas as pd
 import numpy as np
 
@@ -27,7 +26,7 @@ FEATURE_COLS = [
 ]
 
 
-def _load_offers(con: sqlite3.Connection) -> pd.DataFrame:
+def _load_offers(con) -> pd.DataFrame:
     df = pd.read_sql_query("SELECT * FROM offers", con)
     df["captured_at"] = pd.to_datetime(df["captured_at"])
     df["departure_date"] = pd.to_datetime(df["departure_date"])
@@ -59,7 +58,7 @@ def _add_relative_and_trend(df: pd.DataFrame) -> pd.DataFrame:
     return df.drop(columns=["_carr_avg"])
 
 
-def build_training_frame(con: sqlite3.Connection) -> pd.DataFrame:
+def build_training_frame(con) -> pd.DataFrame:
     """Return a frame with FEATURE_COLS + 'price_will_rise' label."""
     df = _load_offers(con)
     df = _add_relative_and_trend(df)
@@ -72,7 +71,7 @@ def build_training_frame(con: sqlite3.Connection) -> pd.DataFrame:
     return df
 
 
-def build_live_features(con: sqlite3.Connection) -> pd.DataFrame:
+def build_live_features(con) -> pd.DataFrame:
     """
     Latest snapshot per trip (what a traveller sees now) with model features,
     for scoring + search. Returns offers-with-features, one row per trip.

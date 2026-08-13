@@ -10,24 +10,27 @@ Endpoints:
   POST /book             {"trip_id": "..."}   (simulated carrier booking call)
   GET  /                             single-page search UI
 
-Serving reads the `predictions` table (latest snapshot per trip + rise_prob),
-mirroring a Redis-cached PostgreSQL read in production.
+Serving reads the `predictions` table (latest snapshot per trip + rise_prob)
+from Postgres when DATABASE_URL is set (SQLite otherwise), cached through
+Redis when REDIS_URL is set (direct reads otherwise) — see cache.py/db.py.
 """
 from __future__ import annotations
 import os
 import json
-import sqlite3
 from typing import Optional
 
 from fastapi import FastAPI, Query
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
+from sqlalchemy import text
+from sqlalchemy.exc import OperationalError, ProgrammingError
 
+import db as dbmod
+import cache
 import nl_search
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
-DB_PATH = os.environ.get("AGG_DB", os.path.join(ROOT, "data", "aggregator.db"))
 MODEL_DIR = os.path.join(ROOT, "models")
 UI_PATH = os.path.join(HERE, "ui", "index.html")
 
@@ -38,12 +41,10 @@ app = FastAPI(title="Skyscanner-for-Nigeria — Multi-Modal Aggregator", version
 
 
 def db():
-    con = sqlite3.connect(DB_PATH)
-    con.row_factory = sqlite3.Row
-    return con
+    return dbmod.ENGINE.connect()
 
 
-def _fmt(row: sqlite3.Row) -> dict:
+def _fmt(row) -> dict:
     prob = float(row["rise_prob"])
     return {
         "trip_id": row["trip_id"],
@@ -63,17 +64,24 @@ def _fmt(row: sqlite3.Row) -> dict:
 
 @app.get("/health")
 def health():
-    ok = os.path.exists(DB_PATH) and os.path.exists(os.path.join(MODEL_DIR, "price_rise_lgbm.txt"))
-    return {"status": "ok" if ok else "not_ready", "db": os.path.exists(DB_PATH)}
+    model_ready = os.path.exists(os.path.join(MODEL_DIR, "price_rise_lgbm.txt"))
+    try:
+        with db() as con:
+            con.execute(text("SELECT 1"))
+        db_ready = True
+    except Exception:
+        db_ready = False
+    return {"status": "ok" if (model_ready and db_ready) else "not_ready", "db": db_ready}
 
 
 @app.get("/routes")
 def routes():
-    con = db()
-    rows = con.execute("SELECT * FROM routes ORDER BY route_id").fetchall()
-    con.close()
-    return [{"route_id": r["route_id"], "origin": r["origin_city"],
-             "destination": r["dest_city"]} for r in rows]
+    def build():
+        with db() as con:
+            rows = con.execute(text("SELECT * FROM routes ORDER BY route_id")).mappings().fetchall()
+        return [{"route_id": r["route_id"], "origin": r["origin_city"],
+                 "destination": r["dest_city"]} for r in rows]
+    return cache.cached("routes", ttl=300, build=build)
 
 
 @app.get("/metrics")
@@ -81,36 +89,37 @@ def metrics():
     p = os.path.join(MODEL_DIR, "metrics.json")
     if not os.path.exists(p):
         return JSONResponse({"error": "model not trained"}, status_code=404)
-    with open(p) as f:
-        return json.load(f)
+
+    def build():
+        with open(p) as f:
+            return json.load(f)
+    return cache.cached("metrics", ttl=300, build=build)
 
 
 def _search(origin, destination, date, sort, mode, part_of_day=None, limit=10):
-    con = db()
     q = "SELECT * FROM predictions WHERE 1=1"
-    args = []
+    params = {}
     if origin and destination:
-        q += " AND route_id = ?"
-        args.append(f"{origin}-{destination}")
+        q += " AND route_id = :route_id"
+        params["route_id"] = f"{origin}-{destination}"
     if date:
-        q += " AND departure_date = ?"
-        args.append(date)
+        q += " AND departure_date = :date"
+        params["date"] = date
     if mode:
-        q += " AND mode = ?"
-        args.append(mode)
+        q += " AND mode = :mode"
+        params["mode"] = mode
     if part_of_day and part_of_day in nl_search.PART_OF_DAY:
         lo, hi = nl_search.PART_OF_DAY[part_of_day]
-        q += " AND departure_hour BETWEEN ? AND ?"
-        args += [lo, hi]
+        q += " AND departure_hour BETWEEN :lo AND :hi"
+        params["lo"], params["hi"] = lo, hi
     order = "duration_min ASC" if sort == "fastest" else "price_ngn ASC"
-    q += f" ORDER BY {order} LIMIT ?"
-    args.append(limit)
+    q += f" ORDER BY {order} LIMIT :limit"
+    params["limit"] = limit
     try:
-        rows = con.execute(q, args).fetchall()
-    except sqlite3.OperationalError:
-        con.close()
+        with db() as con:
+            rows = con.execute(text(q), params).mappings().fetchall()
+    except (OperationalError, ProgrammingError):
         return None  # predictions table not built yet
-    con.close()
     return [_fmt(r) for r in rows]
 
 
@@ -123,7 +132,9 @@ def search(
     mode: Optional[str] = Query(None),
     limit: int = Query(10, le=50),
 ):
-    results = _search(origin, destination, date, sort, mode, limit=limit)
+    key = f"search:{origin}:{destination}:{date}:{sort}:{mode}:{limit}"
+    results = cache.cached(key, ttl=60,
+                            build=lambda: _search(origin, destination, date, sort, mode, limit=limit))
     if results is None:
         return JSONResponse(
             {"detail": "Model not trained yet — run `python run_all.py` first."},
@@ -138,8 +149,10 @@ class NLQuery(BaseModel):
 @app.post("/search/nl")
 def search_nl(body: NLQuery):
     parsed = nl_search.route_query(body.q)
-    results = _search(parsed["origin"], parsed["destination"], parsed["date"],
-                      parsed["sort"], parsed["mode"], parsed.get("part_of_day"))
+    key = f"search_nl:{body.q.strip().lower()}"
+    results = cache.cached(key, ttl=60, build=lambda: _search(
+        parsed["origin"], parsed["destination"], parsed["date"],
+        parsed["sort"], parsed["mode"], parsed.get("part_of_day")))
     if results is None:
         return JSONResponse(
             {"detail": "Model not trained yet — run `python run_all.py` first."},
@@ -154,10 +167,9 @@ class BookRequest(BaseModel):
 @app.post("/book")
 def book(body: BookRequest):
     """Simulated booking-orchestrator call to the carrier API."""
-    con = db()
-    row = con.execute("SELECT * FROM predictions WHERE trip_id = ?",
-                      (body.trip_id,)).fetchone()
-    con.close()
+    with db() as con:
+        row = con.execute(text("SELECT * FROM predictions WHERE trip_id = :trip_id"),
+                          {"trip_id": body.trip_id}).mappings().fetchone()
     if not row:
         return JSONResponse({"error": "trip not found"}, status_code=404)
     import uuid

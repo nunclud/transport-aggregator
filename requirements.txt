@@ -5,5 +5,16 @@ lightgbm>=4.0
 fastapi>=0.110
 uvicorn>=0.27
 pydantic>=2.0
-# optional: enables Claude-powered NL parsing (set USE_CLAUDE=1 + ANTHROPIC_API_KEY), this is under consideration
-# anthropic>=0.34
+sqlalchemy>=2.0
+# postgres driver — used automatically when DATABASE_URL is set (falls back to sqlite otherwise)
+psycopg2-binary>=2.9
+# redis cache — used automatically when REDIS_URL is set (falls back to direct DB reads otherwise)
+redis>=5.0
+# enables Claude-powered NL parsing automatically when ANTHROPIC_API_KEY is set
+anthropic>=0.34
+
+# NOTE: Ray + MLflow (training-only, stage 3) deliberately live in
+# requirements-train.txt, not here. This file is what Vercel's @vercel/python
+# builder installs for api/index.py, and api.py never imports either of them
+# — pulling their large dependency trees into the deploy bundle would bloat
+# (and risk breaking) the serverless build for a feature the API never uses.

@@ -1,7 +1,14 @@
 .venv/
+.venv312/
 __pycache__/
 *.pyc
 
 # generated pipeline output (reproducible via `python run_all.py`)
 data/raw/
 data/*.db-journal
+data/test.db
+data/external/*.csv
+
+# local MLflow tracking store (training-only, not deployed)
+src/mlruns/
+mlruns/

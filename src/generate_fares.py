@@ -14,6 +14,8 @@ import csv
 import random
 from datetime import date, datetime, timedelta
 
+import external_data
+
 random.seed(42)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -43,7 +45,10 @@ BASE = {
 
 # How strongly demand (and thus the chance of a price rise) grows as the
 # departure date approaches, per mode. Higher = fares climb harder near departure.
-URGENCY = {"road": 0.35, "air": 0.55}
+# Air is calibrated from a real public flight-price dataset (external_data.py);
+# no equivalent public dataset exists for Nigerian road fares, so that stays
+# hand-picked.
+URGENCY = {"road": 0.35, "air": external_data.calibrate_air_urgency()}
 
 CAPTURE_HORIZON_DAYS = 30      # we start watching each trip 30 days out
 DEPARTURES_PER_ROUTE = 14      # distinct departure dates per route/carrier

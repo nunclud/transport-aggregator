@@ -9,8 +9,9 @@ ship a rule-based parser with the SAME output contract Claude would return:
 
     {origin, destination, sort, mode, date, part_of_day}
 
-If ANTHROPIC_API_KEY is set and the `anthropic` package is installed, set
-USE_CLAUDE=1 to route parsing through Claude instead (see parse_with_claude).
+If ANTHROPIC_API_KEY is set and the `anthropic` package is installed, Claude
+is used automatically (see parse_with_claude). Set USE_CLAUDE=0 to force the
+rule-based parser even when a key is present.
 """
 from __future__ import annotations
 import os
@@ -130,7 +131,8 @@ def parse_with_claude(text: str) -> dict:  # pragma: no cover - optional path
 
 
 def route_query(text: str) -> dict:
-    if os.environ.get("USE_CLAUDE") == "1" and os.environ.get("ANTHROPIC_API_KEY"):
+    use_claude = os.environ.get("USE_CLAUDE") != "0" and bool(os.environ.get("ANTHROPIC_API_KEY"))
+    if use_claude:
         try:
             return parse_with_claude(text)
         except Exception:

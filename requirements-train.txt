@@ -1,0 +1,11 @@
+# Training-only extras for train_model.py: distributed time-fold cross-validation
+# (Ray) and experiment tracking (MLflow). Not needed to run the API or deploy to
+# Vercel — see requirements.txt for why these are kept separate.
+#
+#   pip install -r requirements.txt -r requirements-train.txt
+#
+# Ray has no Windows wheel for Python 3.13 yet — use a Python 3.10-3.12
+# environment for this file on Windows (e.g. `py -3.12 -m venv .venv312`).
+-r requirements.txt
+ray>=2.9
+mlflow>=2.10
